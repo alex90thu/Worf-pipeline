@@ -1,228 +1,258 @@
 import subprocess
 import matplotlib.pyplot as plt
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Rectangle
 import numpy as np
 import os
 import sys
-from datetime import datetime
 import argparse
-import re
 
-def get_counts(bam_file, chrom, start, end, bin_size):
-    """使用samtools计算指定区间内每个bin的符合条件的reads数"""
-    bins = range(start, end, bin_size)
-    counts = []
-    
-    # 检查samtools是否可用
+# ==========================================
+# 工具函数
+# ==========================================
+
+def check_and_fix_chrom_name(bam_file, target_chrom):
+    """检查 BAM 文件头，自动修正染色体名称"""
+    print(f"[DEBUG] 正在检查染色体名称匹配: 输入 '{target_chrom}' vs BAM文件...")
     try:
-        subprocess.run(['samtools', '--version'], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        raise FileNotFoundError("samtools not found in PATH") from e
+        cmd = ['samtools', 'view', '-H', bam_file]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        bam_chroms = set()
+        for line in result.stdout.splitlines():
+            if line.startswith('@SQ'):
+                parts = line.split('\t')
+                for p in parts:
+                    if p.startswith('SN:'):
+                        bam_chroms.add(p[3:])
+        
+        if target_chrom in bam_chroms:
+            return target_chrom
+        if f"chr{target_chrom}" in bam_chroms:
+            print(f"[WARN] 自动修正染色体名称: {target_chrom} -> chr{target_chrom}")
+            return f"chr{target_chrom}"
+        if target_chrom.startswith('chr'):
+            no_chr = target_chrom.replace('chr', '')
+            if no_chr in bam_chroms:
+                print(f"[WARN] 自动修正染色体名称: {target_chrom} -> {no_chr}")
+                return no_chr
+                
+        print(f"[ERROR] BAM文件中未找到染色体: {target_chrom} (且无法自动修正)")
+        return target_chrom 
+    except Exception as e:
+        print(f"[WARN] 无法读取 BAM Header: {e}")
+        return target_chrom
+
+def get_bam_chrom_length(bam_file, chrom):
+    """获取指定染色体的长度"""
+    try:
+        cmd = ['samtools', 'view', '-H', bam_file]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        for line in result.stdout.split('\n'):
+            if line.startswith('@SQ') and f'SN:{chrom}' in line:
+                for part in line.split('\t'):
+                    if part.startswith('LN:'):
+                        return int(part[3:])
+    except Exception:
+        pass
+    return None
+
+def get_depth_histogram(bam_file, chrom, start, end):
+    """使用 samtools depth 快速获取逐碱基覆盖度"""
+    positions = []
+    depths = []
+    region = f"{chrom}:{start}-{end}"
+    cmd = ['samtools', 'depth', '-r', region, bam_file]
     
-    for b_start in bins:
-        b_end = b_start + bin_size
-        bin_count = 0
-        try:
-            # 使用samtools view获取指定区域的reads
-            cmd = [
-                'samtools', 'view', '-c', 
-                bam_file, 
-                f'{chrom}:{b_start}-{b_end-1}'
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            # 移除空白字符并转换为整数
-            bin_count = int(result.stdout.strip())
-        except (subprocess.CalledProcessError, ValueError):
-            bin_count = 0
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for line in process.stdout:
+            cols = line.strip().split('\t')
+            if len(cols) < 3: continue
+            positions.append(int(cols[1]))
+            depths.append(int(cols[2]))
+        process.wait()
+    except Exception as e:
+        print(f"[ERROR] samtools depth 失败: {e}")
+    return positions, depths
+
+def get_read_intervals(bam_file, chrom, start, end):
+    """获取单条Reads的区间坐标"""
+    intervals = []
+    region = f"{chrom}:{start}-{end}"
+    cmd = ['samtools', 'view', '-F', '4', bam_file, region]
+    
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for line in process.stdout:
+            cols = line.split('\t')
+            if len(cols) < 10: continue
             
-        counts.append(bin_count)
-        
-    return list(bins), counts
-
-def calculate_flanking_stats(bam_file, chrom, center, radii=[200, 500, 1000]):
-    """
-    计算中心点上下游特定范围内的Reads总数
-    radii: 距离中心点的半径列表 (e.g., [200] 意味着范围是 center-200 到 center+200)
-    """
-    stats = {}
-    print(f"\n[INFO] 正在统计中心点 ({chrom}:{center}) 附近的 reads 数...")
-    
-    for r in radii:
-        start = max(0, center - r)
-        end = center + r
-        region_str = f"{chrom}:{start}-{end}"
-        try:
-            cmd = ['samtools', 'view', '-c', bam_file, region_str]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            count = int(result.stdout.strip())
-            stats[r] = count
-            print(f"  - +/- {r}bp (Range: {start}-{end}): {count:,} reads")
-        except subprocess.CalledProcessError:
-            print(f"  [WARN] 无法计算区域 {region_str}")
-            stats[r] = "N/A"
+            read_start = int(cols[3])
+            read_len = len(cols[9]) 
+            read_end = read_start + read_len
             
-    return stats
+            if read_end < start or read_start > end:
+                continue
+            intervals.append((read_start, read_end))
+        process.wait()
+    except Exception as e:
+        print(f"[ERROR] 读取 Reads 失败: {e}")
+    return intervals
 
-def plot_data(bins, counts, chrom, bin_size, title, filename, target_pos=None):
-    """绘图并保存 (改进版配色)"""
+def greedy_stacking(intervals, gap=1):
+    intervals.sort(key=lambda x: x[0])
+    rows = [] 
+    packed_data = [] 
     
-    plt.figure(figsize=(12, 5))
-    
-    # 转换为Mb单位
-    x_centers = (np.array(bins) + bin_size / 2.0) / 1e6
-    counts_arr = np.array(counts)
-
-    # --- [改进点1] 配色方案修改 ---
-    # 放弃原本不可见的 RdYlBu_r，改为高对比度的纯色 'SteelBlue'
-    # 这种颜色在白色背景下清晰，且符合学术出版标准
-    bar_color = 'steelblue' 
-    
-    # 绘制线条
-    # 使用 vlines 绘制，颜色统一
-    plt.vlines(x_centers, 0, counts_arr, color=bar_color, linewidth=0.9, alpha=0.9)
-    
-    # 对于计数为0的区域，如果不画任何东西可能会导致断裂感，
-    # 但在覆盖度图中，留白通常就是表示0。
-    # 如果为了美观需要底线，可以取消下面这行的注释：
-    # plt.axhline(0, color='gray', linewidth=0.5)
-
-    plt.title(title, fontsize=14, fontweight='bold')
-    plt.xlabel(f"Chromosome {chrom} Position (Mb)", fontsize=12)
-    plt.ylabel("Read Counts", fontsize=12)
-    plt.grid(axis='y', linestyle='--', alpha=0.3)
-
-    # 如果给定目标位置，则绘制垂直虚线并标注原始坐标
-    if target_pos is not None:
-        x_target_mb = target_pos / 1e6
-        ymax = counts_arr.max() if counts_arr.size else 1
+    for start, end in intervals:
+        placed = False
+        length = end - start
         
-        # 绘制目标位置红线
-        plt.axvline(x=x_target_mb, color='#e41a1c', linestyle='--', linewidth=1.5, alpha=0.8)
+        for i in range(len(rows)):
+            if rows[i] + gap < start:
+                rows[i] = end 
+                packed_data.append((start, length, i))
+                placed = True
+                break
         
-        # 标注文字
-        plt.text(x_target_mb, ymax * 0.95, f" {int(target_pos):,}", rotation=90,
-                 va='top', ha='right', color='#e41a1c', fontsize=10, fontweight='bold',
-                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#e41a1c", alpha=0.8))
+        if not placed:
+            rows.append(end)
+            packed_data.append((start, length, len(rows) - 1))
+            
+    return packed_data, len(rows)
+
+# ==========================================
+# 绘图函数 (核心修改部分)
+# ==========================================
+
+def plot_pileup(packed_data, total_rows, chrom, start, end, title, filename, center_pos=None):
+    """
+    绘制线性堆叠图
+    Update 1: 使用 tab20 色板进行分层着色
+    Update 2: 强制 Y 轴最小高度，使 Reads 看起来更扁平
+    """
+    # 保持画布大小不变
+    fig, ax = plt.subplots(figsize=(14, 6)) 
+    
+    # 1. 设置颜色
+    # 找到 plot_pileup 函数中的这一行
+    # cmap = plt.get_cmap('tab20')  <-- 删除这行
+    
+    # 换成这行：
+    cmap = plt.get_cmap('Set1')
+
+    patches = []
+    face_colors = []
+    
+    for (s, l, r) in packed_data:
+        # Rectangle((x, y), width, height)
+        rect = Rectangle((s, r), l, 0.8) # 高度保持0.8，留0.2空隙
+        patches.append(rect)
+        # 根据行号 r 循环取色
+        # face_colors.append(cmap(r % 20))
+        face_colors.append(cmap(r % 9))  # Set1 色板有9种颜色
+    
+    # 2. 创建集合并上色
+    coll = PatchCollection(patches, edgecolor='none', alpha=1.0)
+    coll.set_facecolor(face_colors) # 应用颜色列表
+    ax.add_collection(coll)
+    
+    # 3. 设置坐标轴 (实现"压扁"效果的关键)
+    ax.set_xlim(start, end)
+    
+    # 逻辑：如果层数很少(比如5层)，强制把Y轴拉到50，这样5层占的空间就很小，柱子就扁了
+    # 如果层数很多(比如100层)，就用实际层数+缓冲
+    Y_MIN_VISUAL_LIMIT = 50 
+    y_limit = max(total_rows + 2, Y_MIN_VISUAL_LIMIT)
+    ax.set_ylim(0, y_limit)
+    
+    # 装饰
+    ax.set_xlabel(f"Position on {chrom} (bp)", fontsize=12)
+    ax.set_ylabel("Stacked Depth (Layer)", fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    
+    # 标记中心点
+    if center_pos:
+        ax.axvline(x=center_pos, color='#333333', linestyle='--', linewidth=1, alpha=0.8)
+        # 标签也相应往上移
+        ax.text(center_pos, y_limit * 1.01, f" {center_pos:,}", color='#333333', 
+                transform=ax.transData, fontweight='bold', fontsize=10)
 
     plt.tight_layout()
     plt.savefig(filename, dpi=300)
-    print(f"✅ 成功生成图像: {filename}")
     plt.close()
+    print(f"✅ 生成堆叠图: {filename}")
+
+def plot_local_histogram(pos_list, depth_list, chrom, start, end, title, filename):
+    """绘制局部覆盖度柱状图"""
+    if not pos_list: return
+    plt.figure(figsize=(14, 4))
+    plt.fill_between(pos_list, depth_list, color='gray', alpha=0.6, step="mid")
+    plt.xlim(start, end)
+    plt.xlabel(f"Position on {chrom} (bp)")
+    plt.ylabel("Depth")
+    plt.title(title, fontsize=12)
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300)
+    plt.close()
+    print(f"✅ 生成对照组柱状图: {filename}")
+
+# ==========================================
+# 主程序
+# ==========================================
 
 def main():
-    parser = argparse.ArgumentParser(description='WGSmapping: WGS background and target enrichment plotting')
-    parser.add_argument('--bam', required=True, help='Input BAM file path')
-    parser.add_argument('--chromosome', required=True, help='Target chromosome (e.g., chr6)')
-    parser.add_argument('--center', type=int, required=True, help='Center position (bp)')
-    parser.add_argument('--step', type=int, default=100000, help='Step size for genome-wide analysis (bp)')
-    parser.add_argument('--background', type=str, default='true', help='Perform background analysis (true/false)')
-    parser.add_argument('--output', required=True, help='Output directory for plots')
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--bam', required=True)
+    parser.add_argument('--chromosome', required=True)
+    parser.add_argument('--center', type=int, required=True)
+    parser.add_argument('--step', type=int, default=100000)
+    parser.add_argument('--window', type=int, default=10000)
+    parser.add_argument('--background', default='false')
+    parser.add_argument('--output', required=True)
     args = parser.parse_args()
 
-    print("[INFO] === WORF-Seq 染色体比对分析 (v2.0) ===")
-    
-    # 1. 检查BAM文件
-    bam_path = args.bam
-    if not os.path.exists(bam_path):
-        print(f"[ERROR] BAM文件不存在: {bam_path}")
-        return
-    
-    # 2. 输出目录设置
+    bam_file = args.bam
+    raw_chrom = args.chromosome
+    center = args.center
+    half_window = args.window
     out_dir = args.output
-    os.makedirs(out_dir, exist_ok=True)
-    bam_basename = os.path.splitext(os.path.basename(bam_path))[0]
-    sample_prefix = re.sub(r'(_aligned_minimap)?(\.sorted|_sorted)?$', '', bam_basename)
-
-    target_chrom = args.chromosome
-    target_pos = args.center
-    wgs_bin = args.step
-    do_background = args.background.lower() in ['true', 'yes', '1', 'on']
-
-    # 获取染色体长度
-    try:
-        cmd = ['samtools', 'view', '-H', bam_path]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        chrom_length = None
-        for line in result.stdout.split('\n'):
-            if line.startswith('@SQ') and f'SN:{target_chrom}' in line:
-                for part in line.split('\t'):
-                    if part.startswith('LN:'):
-                        chrom_length = int(part[3:])
-                        break
-                break
-        
-        if chrom_length is None:
-            print(f"[ERROR] 无法获取染色体 {target_chrom} 的长度")
-            return
-    except subprocess.CalledProcessError as e:
-        print(f"[ERROR] 获取染色体长度失败: {e}")
-        return
-
-    generated_files = []
-
-    # --- [改进点2] 计算中心区域统计信息 ---
-    # 定义需要统计的半径范围
-    stat_radii = [200, 500, 1000]
-    flanking_stats = calculate_flanking_stats(bam_path, target_chrom, target_pos, stat_radii)
-
-    # --- 执行全长分析 ---
-    if do_background:
-        print(f"\n[INFO] [1/2] 正在分析 {target_chrom} 全长背景...")
-        try:
-            wgs_bins, wgs_counts = get_counts(bam_path, target_chrom, 0, chrom_length, wgs_bin)
-            wgs_fname = os.path.join(out_dir, f"{sample_prefix}_chromosome_{target_chrom}_step{wgs_bin}.png")
-            plot_data(wgs_bins, wgs_counts, target_chrom, wgs_bin,
-                     f"WORF-Seq Chromosome Coverage\\n{target_chrom} (Step: {wgs_bin:,} bp)", 
-                     wgs_fname, target_pos=target_pos)
-            generated_files.append(wgs_fname)
-        except Exception as e:
-            print(f"[ERROR] 全染色体分析失败: {e}")
-    else:
-        print("[INFO] 跳过全染色体分析")
-
-    # --- 执行精细分析 ---
-    micro_bin = 500
-    micro_start = max(0, target_pos - 50000)
-    micro_end = min(chrom_length, target_pos + 50000)
-
-    print(f"[INFO] [2/2] 正在分析目标区域 (+/- 50kb)...")
-    try:
-        m_bins, m_counts = get_counts(bam_path, target_chrom, micro_start, micro_end, micro_bin)
-        target_fname = os.path.join(out_dir, f"{sample_prefix}_target_region_{target_chrom}_{target_pos}.png")
-        plot_data(m_bins, m_counts, target_chrom, micro_bin,
-                 f"WORF-Seq Target Region Coverage\\n{target_chrom}:{micro_start:,}-{micro_end:,}", 
-                 target_fname, target_pos=target_pos)
-        generated_files.append(target_fname)
-    except Exception as e:
-        print(f"[ERROR] 目标区域分析失败: {e}")
     
-    # --- 生成摘要报告 (包含统计信息) ---
-    summary_fname = os.path.join(out_dir, f"{sample_prefix}_worf_seq_summary.txt")
-    try:
-        with open(summary_fname, 'w') as f:
-            f.write("WORF-Seq Analysis Summary Report\\n")
-            f.write("=" * 40 + "\\n")
-            f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\\n")
-            f.write(f"BAM File: {bam_path}\\n")
-            f.write(f"Target: {target_chrom}:{target_pos:,}\\n\\n")
-            
-            f.write("Target Region Statistics (Cumulative Reads):\\n")
-            f.write("-" * 40 + "\\n")
-            for r in stat_radii:
-                count = flanking_stats.get(r, "N/A")
-                range_str = f"{target_chrom}:{max(0, target_pos-r)}-{target_pos+r}"
-                f.write(f"  +/- {r:<4} bp (Total span {2*r:<4} bp): {count:>8} reads  [{range_str}]\\n")
-            f.write("-" * 40 + "\\n\\n")
+    os.makedirs(out_dir, exist_ok=True)
+    basename = os.path.splitext(os.path.basename(bam_file))[0]
+    sample_name = basename.replace('_aligned.sorted', '').replace('_aligned', '')
 
-            f.write("Generated Files:\\n")
-            for file in generated_files:
-                f.write(f"- {file}\\n")
-        generated_files.append(summary_fname)
-        print(f"[INFO] 摘要报告已保存: {summary_fname}")
-    except Exception as e:
-        print(f"[ERROR] 生成摘要报告失败: {e}")
+    chrom = check_and_fix_chrom_name(bam_file, raw_chrom)
+    
+    start_pos = max(1, center - half_window)
+    end_pos = center + half_window
+    print(f"[INFO] 分析窗口: {chrom}:{start_pos:,}-{end_pos:,}")
 
-    print(f"\n[SUCCESS] 分析完成，生成 {len(generated_files)} 个文件。")
+    # Step 1: Histogram Check
+    depth_pos, depth_vals = get_depth_histogram(bam_file, chrom, start_pos, end_pos)
+    if len(depth_vals) > 0:
+        hist_file = os.path.join(out_dir, f"{sample_name}_target_{chrom}_hist.png")
+        plot_local_histogram(depth_pos, depth_vals, chrom, start_pos, end_pos, 
+                            f"Coverage Check: {chrom}:{center}", hist_file)
+
+    # Step 2: Pile-up Plot
+    intervals = get_read_intervals(bam_file, chrom, start_pos, end_pos)
+    
+    if len(intervals) > 0:
+        if len(intervals) > 30000:
+            print("[WARN] Reads > 30000, subsampling...")
+            intervals = intervals[::2]
+
+        packed, max_rows = greedy_stacking(intervals, gap=1)
+        print(f"    堆叠完成，最大层数: {max_rows}")
+        
+        out_png = os.path.join(out_dir, f"{sample_name}_target_{chrom}_{center}_pileup.png")
+        plot_pileup(packed, max_rows, chrom, start_pos, end_pos,
+                   f"Reads Pile-up: {chrom}:{center}",
+                   out_png, center_pos=center)
+    else:
+        print("[WARN] 没有 Reads，跳过绘图。")
 
 if __name__ == "__main__":
     main()

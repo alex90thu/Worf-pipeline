@@ -1,16 +1,32 @@
 name: worf-env
+name: worf-env
 channels:
   - conda-forge
   - bioconda
   - defaults
 dependencies:
   - python=3.11
-  # Core tools
-  - fastp
-  - minimap2
-  - samtools
-  # Python plotting
-  - matplotlib
-  - numpy
-  # Optional: for general usage
-  - pip
+  name: worf-env
+  channels:
+    - conda-forge
+    - bioconda
+    - defaults
+  dependencies:
+    - python=3.11
+    - fastp
+    name: worf-env
+    channels:
+      - conda-forge
+      - bioconda
+      - defaults
+    dependencies:
+      - python=3.11
+      - fastp
+      - minimap2
+      - samtools
+      - matplotlib
+      - numpy
+      - pip
+      - pip:
+        - matplotlib>=3.7
+        - numpy>=1.24
