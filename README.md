@@ -22,11 +22,11 @@ scripts/
 ```
 
 ## 环境准备
-建议使用 Conda 创建并激活环境（名称与 `worf.sh` 中一致：`worf-env`）。
+建议使用 Conda 创建并激活环境（名称与 `worf.sh` 一致：`worf_env`）。
 
 ```bash
 conda env create -f environment.yml
-conda activate worf-env
+conda activate worf_env
 ```
 
 如果你只需要 Python 依赖，也可以：
@@ -64,11 +64,11 @@ scripts/
 ```
 
 ## 环境准备
-建议使用 Conda 创建并激活环境（默认环境名：`worf-env`）。
+建议使用 Conda 创建并激活环境（默认环境名：`worf_env`）。
 
 ```bash
 conda env create -f environment.yml
-conda activate worf-env
+conda activate worf_env
 ```
 
 如果只需要 Python 包，也可以使用 pip：
@@ -110,8 +110,18 @@ bash worf.sh -f <input_folder> -c <chrom> -p <center_bp> \
 示例：
 
 ```bash
-bash worf.sh -f /data/.../UDI001 -c 6 -p 31429000 -w 10000
+bash worf.sh -f /data/.../UDI001 -c chr6 -p 31429000 -w 10000
 ```
+
+### Checkpoints 与重复绘图
+- 前三步（`01_qc.sh`, `02_align.sh`, `03_process.sh`）仍使用 checkpoint 机制（`.01_qc.done` 等）。
+- `04_plot.sh` 不再创建/检查 checkpoint，允许使用不同 `-c/-p/-w` 参数反复绘图。
+
+### 绘图输出命名
+- 由 `scripts/WGSmapping.py` 生成的图像文件名包含 `-c`（染色体）、`-p`（中心位置）、`-w`（窗口半径）与时间戳，便于区分多次绘图。
+- 命名示例：
+  - `SAMPLE_cchr6_p31249000_w10000_20260108_142233_hist.png`
+  - `SAMPLE_cchr6_p31249000_w10000_20260108_142233_pileup.png`
 
 脚本会创建以下目录（在 `<outdir>` 下）：
 

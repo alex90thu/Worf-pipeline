@@ -6,6 +6,7 @@ import numpy as np
 import os
 import sys
 import argparse
+from datetime import datetime
 
 # ==========================================
 # 工具函数
@@ -229,10 +230,16 @@ def main():
     end_pos = center + half_window
     print(f"[INFO] 分析窗口: {chrom}:{start_pos:,}-{end_pos:,}")
 
+    # 统一时间戳与命名前缀：包含 -c, -p, -w 与时间戳
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # 清理可能的路径不安全字符（理论上 chrom 是安全的，这里保持一致性）
+    chrom_safe = str(chrom).replace('/', '_')
+    prefix = f"{sample_name}_c{chrom_safe}_p{center}_w{half_window}_{timestamp}"
+
     # Step 1: Histogram Check
     depth_pos, depth_vals = get_depth_histogram(bam_file, chrom, start_pos, end_pos)
     if len(depth_vals) > 0:
-        hist_file = os.path.join(out_dir, f"{sample_name}_target_{chrom}_hist.png")
+        hist_file = os.path.join(out_dir, f"{prefix}_hist.png")
         plot_local_histogram(depth_pos, depth_vals, chrom, start_pos, end_pos, 
                             f"Coverage Check: {chrom}:{center}", hist_file)
 
@@ -247,7 +254,7 @@ def main():
         packed, max_rows = greedy_stacking(intervals, gap=1)
         print(f"    堆叠完成，最大层数: {max_rows}")
         
-        out_png = os.path.join(out_dir, f"{sample_name}_target_{chrom}_{center}_pileup.png")
+        out_png = os.path.join(out_dir, f"{prefix}_pileup.png")
         plot_pileup(packed, max_rows, chrom, start_pos, end_pos,
                    f"Reads Pile-up: {chrom}:{center}",
                    out_png, center_pos=center)

@@ -65,14 +65,17 @@ run_module() {
     local script_path="${MODULE_DIR}/${step_name}"
     local checkpoint_file="${OUTPUT_DIR}/.${step_name%.*}.done"
 
-    if [[ "$FORCE_RUN" == "false" && -f "$checkpoint_file" ]]; then
+    # 对 04_plot.sh 不进行 checkpoint 跳过与创建，保证可重复绘图
+    if [[ "$step_name" != "04_plot.sh" && "$FORCE_RUN" == "false" && -f "$checkpoint_file" ]]; then
         log_info "Skipping $step_name (Checkpointed)"
         return 0
     fi
     log_info "Running $step_name..."
     if /bin/bash "$script_path"; then
         log_info "$step_name Completed."
-        touch "$checkpoint_file"
+        if [[ "$step_name" != "04_plot.sh" ]]; then
+            touch "$checkpoint_file"
+        fi
     else
         log_error "$step_name Failed."
         exit 1

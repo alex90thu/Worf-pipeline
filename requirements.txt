@@ -1,2 +1,4 @@
+# Python dependencies (pip)
+# Note: fastp/minimap2/samtools are installed via Conda (see environment.yml)
 matplotlib>=3.7
 numpy>=1.24
