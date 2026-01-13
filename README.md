@@ -21,11 +21,15 @@ references/
 scripts/
   WGSmapping.py
   bam2mongo.py
+  query_worf.py
+  fetch_genes.py
+  bam2mongo.py
 server/
   main.py
   database.py
   models.py
   README.md
+worf_tools.sh
 ```
 
 ## 环境准备
@@ -89,6 +93,14 @@ bash worf.sh -f /data/.../UDI001 -c chr6 -p 31429000 -w 10000
 ## 数据入库与查询
 - 第三步 `modules/03_db_ingest.sh` 调用 `scripts/bam2mongo.py` 将 BAM 映射元数据写入 MongoDB（默认 `127.0.0.1:30001`）。
 - 查询与可视化结果可通过服务端 API 访问，详见 [server/README.md](server/README.md)。
+
+### 独立工具脚本：`worf_tools.sh`
+- 功能：提供交互式/命令行方式进行数据库入库与查询。
+- 依赖：`scripts/bam2mongo.py`、`scripts/query_worf.py`，以及 MongoDB 服务（默认 `127.0.0.1:30001`）。
+- 用法：
+  - 打开交互式菜单：`./worf_tools.sh`
+  - 手动入库：`./worf_tools.sh ingest <bam_path> [sample_id]`
+  - 交互式查询（TUI）：`./worf_tools.sh query`
 
 ## 服务端 API（FastAPI）
 启动服务：

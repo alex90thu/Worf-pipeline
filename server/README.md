@@ -115,6 +115,14 @@ curl -s "http://localhost:8018/query/SAMPLE_001?chrom=chr1&start=100000&end=2000
 curl -s "http://localhost:8018/query/SAMPLE_001?chrom=chr1&limit=1000" | jq .
 ```
 
+### 命令行工具（worf_tools.sh）
+- 如需在命令行完成入库或交互式查询，可使用根目录的 `worf_tools.sh`。
+- 示例：
+  - 打开交互式菜单：`./worf_tools.sh`
+  - 手动入库：`./worf_tools.sh ingest <bam_path> [sample_id]`
+  - 交互式查询（TUI）：`./worf_tools.sh query`
+- 依赖：MongoDB (`127.0.0.1:30001`)，以及 `scripts/bam2mongo.py`、`scripts/query_worf.py`。
+
 ## 数据库结构与查询逻辑（简述）
 
 - 集合：`reads_mapping`
