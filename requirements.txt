@@ -1,4 +1,12 @@
 # Python dependencies (pip)
-# Note: fastp/minimap2/samtools are installed via Conda (see environment.yml)
+# Note: fastp/minimap2/samtools/pysam are best installed via Conda (see environment.yml)
+
+# Core scientific stack
 matplotlib>=3.7
 numpy>=1.24
+pysam
+
+# App server & database access
+fastapi
+uvicorn
+pymongo

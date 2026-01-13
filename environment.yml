@@ -8,6 +8,13 @@ dependencies:
   - fastp
   - minimap2
   - samtools
+  - pysam
   - matplotlib>=3.7
   - numpy>=1.24
   - pip
+
+  # Python packages via pip (app services & DB access)
+  - pip:
+      - fastapi
+      - uvicorn
+      - pymongo
